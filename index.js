@@ -1,44 +1,67 @@
 'use strict';
 
+const _ = require('lodash');
 const TelegramBot = require('node-telegram-bot-api');
 const Db = require('./db');
 const User = require('./models/user');
 const Word = require('./models/word');
+const Asker = require('./asker');
 const config = require('./config');
 
 const bot = new TelegramBot(config.token, {polling: true});
 const db = new Db(config.dbUrl);
 db.connect();
 
+const SERIAL_CORRECT_ANSWERS_THRESHOLD = 3;
+const asker = new Asker(bot, WORD_ASK_INTERVAL, SERIAL_CORRECT_ANSWERS_THRESHOLD);
+
 [
     {
         pattern: /^\/start$/,
         action: async (msg, match) => {
-            const message = "Hi! I'm English learning bot, and I will help you to learn new English words!\n" +
-                "Type /help to learn more.";
-            bot.sendMessage(msg.from.id, message);
+            const userId = msg.from.id;
 
-            const user = new User({
-                userId: msg.from.id,
-                learnedWordsIds: [],
-            });
-            await user.save();
+            let user = await User.findOne({userId});
+            if (!user) {
+                user = new User({
+                    userId,
+                    lastAskedAt: new Date(0),
+                    createdAt: Date.now(),
+                    /**
+                     * {wordId: '597640cfcb534142ec2e2251', wrongAnswers: 2, correctAnswers: 3}
+                     */
+                    words: [],
+                });
+                await user.save();
+                bot.sendMessage(userId, 'Hi, new user! I will help you to learn new words!');
+            } else {
+                bot.sendMessage(userId, `Hey, you've already learned ${user.get('learnedWordsIds').length} word(s).`);
+            }
         }
     },
     {
-        pattern: /^\/help$/,
-        action: (msg, match) => {
-            let message =
-                "Hey! You can use following commands:\n\n" +
-                "/list – to get info about all fresh versions I've found for ya ^^";
-            bot.sendMessage(msg.from.id, message);
-        }
-    },
-    {
-        pattern: /^\/adm_add_word$/,
+        pattern: /^\/adm_add_word ([^\n]+)\n(.*)/,
         admin: true,
         action: async (msg, match) => {
-            bot.sendMessage(msg.from.id, message, {disable_web_page_preview: true});
+            const userId = msg.from.id;
+
+            const wordsInput = _.map(match[1].split(','), _.lowerCase);
+            const translationsInput = _.map(match[2].split(','), _.lowerCase);
+
+            let word = await Word.where('words').in(wordsInput).findOne();
+            if (!word) {
+                word = new Word({
+                    words: wordsInput,
+                    translations: translationsInput,
+                });
+                await word.save();
+                const message = `New word was saved with ID ${word.get('_id')}\n\n` +
+                    `Word:\n` +
+                    word.get('words').join('\n') + '\n\n' +
+                    `Translations:\n` +
+                    word.get('translations').join('\n');
+                bot.sendMessage(userId, message);
+            }
         }
     },
     {
