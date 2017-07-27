@@ -12,8 +12,7 @@ const bot = new TelegramBot(config.token, {polling: true});
 const db = new Db(config.dbUrl);
 db.connect();
 
-const SERIAL_CORRECT_ANSWERS_THRESHOLD = 3;
-const asker = new Asker(bot, WORD_ASK_INTERVAL, SERIAL_CORRECT_ANSWERS_THRESHOLD);
+const asker = new Asker(bot);
 
 [
     {
@@ -26,10 +25,7 @@ const asker = new Asker(bot, WORD_ASK_INTERVAL, SERIAL_CORRECT_ANSWERS_THRESHOLD
                 user = new User({
                     userId,
                     lastAskedAt: new Date(0),
-                    createdAt: Date.now(),
-                    /**
-                     * {wordId: '597640cfcb534142ec2e2251', wrongAnswers: 2, correctAnswers: 3}
-                     */
+                    createdAt: new Date(),
                     words: [],
                 });
                 await user.save();
@@ -45,8 +41,14 @@ const asker = new Asker(bot, WORD_ASK_INTERVAL, SERIAL_CORRECT_ANSWERS_THRESHOLD
         action: async (msg, match) => {
             const userId = msg.from.id;
 
-            const wordsInput = _.map(match[1].split(','), _.lowerCase);
-            const translationsInput = _.map(match[2].split(','), _.lowerCase);
+            const wordsInput = _(match[1].split(','))
+                .map(_.lowerCase)
+                .map(_.trim)
+                .value();
+            const translationsInput = _(match[2].split(','))
+                .map(_.lowerCase)
+                .map(_.trim)
+                .value();
 
             let word = await Word.where('words').in(wordsInput).findOne();
             if (!word) {
