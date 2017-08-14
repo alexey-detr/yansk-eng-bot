@@ -1,12 +1,12 @@
-'use strict';
-
 const _ = require('lodash');
-const User = require('./models/user');
-const Word = require('./models/word');
 
 class Asker {
 
-    constructor(bot) {
+    /**
+     * @param bot
+     * @param {Db} db
+     */
+    constructor(bot, db) {
         // this.CHECK_INTERVAL = 63 * 9 * 1000;
         // this.ASK_INTERVAL = 3 * 60 * 60 * 1000;
         this.CHECK_INTERVAL = 5 * 1000;
@@ -14,6 +14,7 @@ class Asker {
         this.CORRECT_ANSWER_THRESHOLD = 3;
 
         this.bot = bot;
+        this.db = db;
         this.process();
         setInterval(this.process.bind(this), this.CHECK_INTERVAL);
     }
@@ -21,47 +22,79 @@ class Asker {
     async process() {
         const askTimeThreshold = Date.now() - this.ASK_INTERVAL;
 
-        const usersToAsk = await User.where({
-            lastAskedAt: {$lte: new Date(askTimeThreshold)}
-        }).find();
+        const usersToAsk = await this.db.collection('users').find({
+            lastRepliedAt: {$lte: new Date(askTimeThreshold)},
+        }).toArray();
+        console.log(`There are ${usersToAsk.length} user(s) to ask`);
         for (const user of usersToAsk) {
-            console.log(`Processing user ${user.get('userId')}`);
+            console.log(`Processing user ${user.userId}`);
 
-            const learnedWords = _.filter(user.get('words'), word => word.correctAnswers >= this.CORRECT_ANSWER_THRESHOLD);
+            const learnedWords = _.filter(user.words, word => word.correctAnswers >= this.CORRECT_ANSWER_THRESHOLD);
             const learnedWordIds = _.map(learnedWords, 'wordId');
 
-            console.log(`Learning (or learned) words amount ${user.get('words').length}`);
+            console.log(`Learning (or learned) words amount ${user.words.length}`);
 
-            const word = await Word.where({_id: {$nin: learnedWordIds}}).findOne();
+            const word = await this.db.collection('words').findOne({_id: {$nin: learnedWordIds}});
             if (!word) {
                 continue;
             }
 
-            console.log(`Asking word ${word.get('_id')} to user ${user.get('userId')}`);
+            console.log(`Asking word ${word._id} to user ${user.userId}`);
 
-            Asker._ensureWordForUser(word, user);
+            this.ensureWordForUser(word, user);
+            this.db.collection('users').update({_id: user._id}, {
+                $set: {
+                    lastAskedWordId: word._id,
+                },
+            });
 
-            const message = word.get('words').join(', ');
-            this.bot.sendMessage(user.get('userId'), message)
+            const message = word.words[_.random(0, word.words.length - 1)];
+
+            const words = await this._findTranslationVariants();
+            const buttons = words.map(word => [{
+                text: word.translations[_.random(0, word.translations.length - 1)],
+                callback_data: JSON.stringify({
+                    type: 'guess_translation',
+                    wordId: word._id,
+                }),
+            }]);
+            const form = {
+                reply_markup: {
+                    inline_keyboard: buttons,
+                },
+            };
+            this.bot.sendMessage(user.userId, message, form);
         }
     }
 
-    static async _ensureWordForUser(word, user) {
-        if (user.get('words').some(item => String(item.wordId) === String(word.get('_id')))) {
+    async _findTranslationVariants() {
+        return this.db.collection('words').aggregate(
+            [{$sample: {size: 4}}],
+            {cursor: {batchSize: 1}},
+        ).toArray();
+    }
+
+    async ensureWordForUser(word, user) {
+        if (user.words.some(item => String(item.wordId) === String(word._id))) {
             return;
         }
-        const wordObject = Asker._initEmbeddedWordObject(word);
-        user.get('words').push(wordObject);
-        user.set('lastAskedAt', new Date());
-        await user.save();
+        const newWord = Asker.initEmbeddedWordObject(word);
+        this.db.collection('users').update({_id: user._id}, {
+            $push: {
+                words: newWord,
+            },
+            $set: {
+                lastAskedAt: new Date(),
+            },
+        });
     }
 
-    static _initEmbeddedWordObject(word) {
+    static initEmbeddedWordObject(word) {
         return {
-            wordId: word.get('_id'),
+            wordId: word._id,
             wrongAnswers: 0,
             correctAnswers: 0,
-            learnedAt: new Date(0),
+            learnedAt: null,
         };
     }
 }
