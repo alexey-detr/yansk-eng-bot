@@ -14,7 +14,7 @@ async function run() {
             pattern: /^\/start$/,
             action: async (msg, match) => {
                 const userId = msg.from.id;
-                let user = await db.collection('users').findOne();
+                let user = await db.collection('users').findOne({userId});
                 if (!user) {
                     user = {
                         userId,
