@@ -29,10 +29,12 @@ async function run() {
                     bot.sendMessage(userId, 'Hi, new user! I will help you to learn new words!');
                 } else {
                     await db.collection('users').update({_id: user._id}, {
-                        lastAskedAt: new Date(0),
-                        lastRepliedAt: new Date(0),
-                        lastAskedWordId: null,
-                        lastWordReplied: true,
+                        $set: {
+                            lastAskedAt: new Date(0),
+                            lastRepliedAt: new Date(0),
+                            lastAskedWordId: null,
+                            lastWordReplied: true,
+                        },
                     });
                     bot.sendMessage(userId, `Hey, you've already learned ${user.words.length} word(s).`);
                 }
