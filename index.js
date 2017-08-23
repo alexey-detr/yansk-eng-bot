@@ -18,31 +18,38 @@ async function run() {
                 if (!user) {
                     user = {
                         userId,
-                        lastAskedAt: new Date(0),
-                        lastRepliedAt: new Date(0),
                         createdAt: new Date(),
                         words: [],
+                        lastAskedAt: new Date(0),
+                        lastRepliedAt: new Date(0),
                         lastAskedWordId: null,
+                        lastWordReplied: true,
                     };
                     await db.collection('users').insertOne(user);
                     bot.sendMessage(userId, 'Hi, new user! I will help you to learn new words!');
                 } else {
+                    await db.collection('users').update({_id: user._id}, {
+                        lastAskedAt: new Date(0),
+                        lastRepliedAt: new Date(0),
+                        lastAskedWordId: null,
+                        lastWordReplied: true,
+                    });
                     bot.sendMessage(userId, `Hey, you've already learned ${user.words.length} word(s).`);
                 }
             }
         },
         {
-            pattern: /^\/adm_add_word ([^\n]+)\n(.*)/,
+            pattern: /^\/add ([^\n]+)\n(.*)/,
             admin: true,
             action: async (msg, match) => {
                 const userId = msg.from.id;
 
                 const wordsInput = _(match[1].split(','))
-                    .map(_.lowerCase)
+                    .map(_.toLower)
                     .map(_.trim)
                     .value();
                 const translationsInput = _(match[2].split(','))
-                    .map(_.lowerCase)
+                    .map(_.toLower)
                     .map(_.trim)
                     .value();
 
@@ -51,6 +58,7 @@ async function run() {
                     word = {
                         words: wordsInput,
                         translations: translationsInput,
+                        random: Math.random(),
                     };
                     db.collection('words').insertOne(word);
                     const message = `New word was saved with ID ${word._id}\n\n` +
@@ -63,19 +71,33 @@ async function run() {
             }
         },
         {
-            pattern: /^\/adm_list_words$/,
+            pattern: /^\/list$/,
             admin: true,
             action: (msg, match) => {
                 bot.sendMessage(msg.from.id, message, {disable_web_page_preview: true});
             }
         },
         {
-            pattern: /^\/adm_stat$/,
+            pattern: /^\/stat$/,
             admin: true,
             action: (msg, match) => {
                 bot.sendMessage(msg.from.id, `Current number of watchers: ${watchingUserIds.size.toString()}`);
             }
-        }
+        },
+        {
+            pattern: /^\/randomize$/,
+            admin: true,
+            action: async () => {
+                const words = await db.collection('words').find().toArray();
+                for (const word of words) {
+                    db.collection('words').update({_id: word._id}, {
+                        $set: {
+                            random: Math.random(),
+                        },
+                    });
+                }
+            }
+        },
     ].forEach((action) => {
         bot.onText(action.pattern, (msg, match) => {
             if (action.admin && msg.from.id !== config.adminUserId) {
@@ -85,15 +107,22 @@ async function run() {
         });
     });
 
-    bot.on('callback_query', async msg => {
-        const data = JSON.parse(msg.data);
+    bot.on('callback_query', async callbackQuery => {
+        const data = JSON.parse(callbackQuery.data);
 
-        const user = await db.collection('users').findOne({userId: msg.from.id});
-        db.collection('users').update({_id: user._id}, {$set: {lastRepliedAt: new Date()}});
+        const user = await db.collection('users').findOne({userId: callbackQuery.from.id});
+        db.collection('users').update({_id: user._id}, {
+            $set: {
+                lastRepliedAt: new Date(),
+                lastWordReplied: true,
+            }
+        });
 
         switch (data.type) {
             case 'guess_translation': {
-                const wordIndex = _.findIndex(user.words, word => word.wordId);
+                const wordIndex = user.words.findIndex(word => {
+                    return String(word.wordId) === String(user.lastAskedWordId);
+                });
                 const word = user.words[wordIndex];
                 if (String(user.lastAskedWordId) === String(data.wordId)) {
                     const update = {
@@ -106,9 +135,9 @@ async function run() {
                             [`words.${wordIndex}.learnedAt`]: new Date(),
                         };
 
-                        bot.answerCallbackQuery(msg.id, 'You learned it! 😁');
+                        bot.answerCallbackQuery(callbackQuery.id, 'You learned it! 😁');
                     } else {
-                        bot.answerCallbackQuery(msg.id, 'Correct! 🙂');
+                        bot.answerCallbackQuery(callbackQuery.id, 'Correct! 🙂');
                     }
                     db.collection('users').update({_id: user._id}, update);
                 } else {
@@ -118,8 +147,13 @@ async function run() {
                         },
                     });
 
-                    bot.answerCallbackQuery(msg.id, 'Wrong! 😔');
+                    bot.answerCallbackQuery(callbackQuery.id, 'Wrong! 😔');
                 }
+
+                bot.editMessageReplyMarkup({}, {
+                    chat_id: callbackQuery.message.chat.id,
+                    message_id: callbackQuery.message.message_id,
+                });
 
                 break;
             }

@@ -7,10 +7,10 @@ class Asker {
      * @param {Db} db
      */
     constructor(bot, db) {
-        // this.CHECK_INTERVAL = 63 * 9 * 1000;
-        // this.ASK_INTERVAL = 3 * 60 * 60 * 1000;
-        this.CHECK_INTERVAL = 5 * 1000;
-        this.ASK_INTERVAL = 10 * 1000;
+        this.CHECK_INTERVAL = 61 * 3 * 1000;
+        this.ASK_INTERVAL = 60 * 60 * 1000;
+        // this.CHECK_INTERVAL = 2 * 1000;
+        // this.ASK_INTERVAL = 3 * 1000;
         this.CORRECT_ANSWER_THRESHOLD = 3;
 
         this.bot = bot;
@@ -23,9 +23,15 @@ class Asker {
         const askTimeThreshold = Date.now() - this.ASK_INTERVAL;
 
         const usersToAsk = await this.db.collection('users').find({
+            lastWordReplied: true,
             lastRepliedAt: {$lte: new Date(askTimeThreshold)},
         }).toArray();
+
+        if (usersToAsk.length === 0) {
+            return;
+        }
         console.log(`There are ${usersToAsk.length} user(s) to ask`);
+
         for (const user of usersToAsk) {
             console.log(`Processing user ${user.userId}`);
 
@@ -34,7 +40,10 @@ class Asker {
 
             console.log(`Learning (or learned) words amount ${user.words.length}`);
 
-            const word = await this.db.collection('words').findOne({_id: {$nin: learnedWordIds}});
+            let word = await this.db.collection('words').aggregate([
+                {$match: {_id: {$nin: learnedWordIds}}},
+                {$sample: {size: 1}},
+            ]).next();
             if (!word) {
                 continue;
             }
@@ -45,17 +54,23 @@ class Asker {
             this.db.collection('users').update({_id: user._id}, {
                 $set: {
                     lastAskedWordId: word._id,
+                    lastWordReplied: false,
                 },
             });
 
-            const message = word.words[_.random(0, word.words.length - 1)];
+            const wordToAsk = word.words[_.random(0, word.words.length - 1)];
+            const message = `Try to guess this one 🤔\n"${wordToAsk}"`;
 
             const words = await this._findTranslationVariants();
-            const buttons = words.map(word => [{
+            if (!words.some(item => String(item._id) === String(word._id))) {
+                words.pop();
+                words.push(word);
+            }
+            const buttons = _.shuffle(words).map(word => [{
                 text: word.translations[_.random(0, word.translations.length - 1)],
                 callback_data: JSON.stringify({
                     type: 'guess_translation',
-                    wordId: word._id,
+                    wordId: String(word._id),
                 }),
             }]);
             const form = {
@@ -69,8 +84,9 @@ class Asker {
 
     async _findTranslationVariants() {
         return this.db.collection('words').aggregate(
-            [{$sample: {size: 4}}],
-            {cursor: {batchSize: 1}},
+            [
+                {$sample: {size: 4}},
+            ],
         ).toArray();
     }
 
